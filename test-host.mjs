@@ -9,7 +9,7 @@
  * 运行：node test-host.mjs
  */
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -315,7 +315,7 @@ check("绕过目录的路径也不给（403）", traversal?.ok === false && trav
 // 允许的路径：测试环境设了 DSH_SESSION_SHARE_NO_SPAWN=1，只算命令不拉窗口
 const select = await call("POST", "/reveal", { path: mdFile.path, mode: "select" });
 check("定位导出过的文件：返回实情", select?.ok === true, JSON.stringify(select)?.slice(0, 200));
-check("只算命令、不真的拉窗口（自测不弹窗）", select.result?.via === "spawn" && select.result?.spawned === false,
+check("只算命令、不真的拉窗口（自测不弹窗）", select.result?.spawned === false,
   JSON.stringify(select.result));
 check("Windows 定位用 explorer /select,", process.platform !== "win32"
   || (select.result?.command === "explorer.exe" && select.result?.mode === "select"),
@@ -332,11 +332,23 @@ check("定位参数原样传给 explorer（不让 libuv 再加工）", process.p
 // **静默失败**（用户看到的就是"点了没反应"）；`explorer.exe <文件>` 实测能拉起关联程序。
 const open = await call("POST", "/reveal", { path: mdFile.path, mode: "open" });
 check("打开文件：命令行方式不谎报成功",
-  open?.ok === true && open.result?.via === "spawn" && open.result?.opened === undefined,
+  open?.ok === true && open.result?.opened === undefined,
   JSON.stringify(open.result));
-check("Windows 打开文件用 explorer.exe（不是 rundll32）", process.platform !== "win32"
-  || (open.result?.command === "explorer.exe" && open.result?.mode === "open"),
+check("Windows 打开文件走 explorer（有默认程序时）或记事本（没有时）", process.platform !== "win32"
+  || (open.result?.command === "explorer.exe" && open.result?.mode === "open")
+  || (open.result?.command === "notepad.exe" && open.result?.fallback === "no-association"),
   JSON.stringify(open.result));
+// 回归：没有默认程序时不去弹「打开方式」选择框让用户猜，直接**用记事本打开**（用户指定）。
+// 用一个**确定没有关联**的扩展名来测，结果与这台机器装了什么无关。
+const unassociatedPath = join(assetsDir, "没有关联的文件.zzzshare");
+writeFileSync(unassociatedPath, "hello\n", "utf8");
+const unassociated = await call("POST", "/reveal", { path: unassociatedPath, mode: "open" });
+check("没有默认程序 -> 记事本打开", process.platform !== "win32"
+  || (unassociated.result?.command === "notepad.exe"
+    && unassociated.result?.fallback === "no-association"
+    && unassociated.result?.args?.[0] === unassociatedPath),
+  JSON.stringify(unassociated.result));
+check("记事本这条路同样不谎报结果", unassociated.result?.opened === undefined && unassociated.result?.via === "notepad");
 const missingPath = await call("POST", "/reveal", { path: join(mdFolder, "不存在.md") });
 check("路径不存在（404）", missingPath?.ok === false && missingPath.code === "not-found");
 

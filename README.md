@@ -36,7 +36,7 @@
 
 | 平台 | 打开文件 | 定位到文件 |
 |---|---|---|
-| Windows | `explorer.exe <文件>` | `explorer.exe /select,"<文件>"`（原样传参，引号只包路径） |
+| Windows | 有默认程序用 `explorer.exe <文件>`；**没有就用 `notepad.exe <文件>`** | `explorer.exe /select,"<文件>"`（原样传参，引号只包路径） |
 | macOS | `open <文件>` | `open -R <文件>` |
 | Linux | `xdg-open <文件>` | `xdg-open <所在目录>` |
 
@@ -45,6 +45,15 @@ Windows 上这一条是**实测挑出来的**：`rundll32 url.dll,FileProtocolHa
 也考虑过 Electron 的 `shell.openPath`（它有返回值，失败能说出原因），但**拿不到**：DSH 的 Electron 主进程是把 host 当**子进程** spawn 出去的（`…/dsh-desktop-host/lib/index.js`），插件跑在那个纯 Node 子进程里，`import("electron")` 只会拿到 npm 上同名包的路径字符串。
 
 代价说清楚：命令行这条路**拿不到结果**，所以接口只回「已请求系统打开」（`opened` 保持 `undefined`，不谎报成功），面板也只说「已请求系统打开」。spawn 本身失败（命令不存在之类）会记进 host 日志。
+
+**没有默认程序时用记事本打开**（不是弹「打开方式」）。Windows 对"没有关联程序的文件"默认行为是弹**「打开方式」选择框** —— 实测：对一个没有任何关联的扩展名执行 `explorer.exe <文件>`，一个窗口都不开，只起了个 `OpenWith.exe`；用户取消就什么都不会发生。与其让人在一个弹框里猜，不如直接用记事本打开，面板也会说明「这个类型没有默认程序，已用记事本打开」。
+
+判据每次点击现查（Windows 注册表，`reg query`）：
+
+1. 当前用户的 `HKCU\…\FileExts\<ext>\UserChoice` 的 `ProgId` —— 双击时用的就是它；但该 ProgId 必须**真的存在**（`HKCR\<ProgId>`），否则是"程序卸载了、关联还挂着"，那种情况 ShellExecute 会静默失败，也该落到记事本；
+2. 否则看系统级 `HKCR\<ext>` 的默认值。
+
+> 不能用 `assoc` / `ftype` 判断：它们只看 HKCR，看不到 per-user 的 UserChoice —— 本机实测 `assoc .md` 回"没有关联"，而实际双击能正常打开 Typora。
 
 「定位到文件」还有个**引号陷阱**（实测踩过）：直接传 `/select,<路径>`，路径里的空格会让 libuv 把**整个参数**（连 `/select` 开关一起）包进引号 —— Explorer 收到 `"/select,C:\a b\f.md"` 就认不出这个开关，**退而打开默认目录**（带 ` (2)` 的导出目录实测会打开"文档"）。正确写法是 `/select,"<路径>"` 且原样传参（`windowsVerbatimArguments`），引号只包路径。导出目录名常常带空格（`…-2254 (2)` 这种顺延名就带），所以这条不是边角情况。
 
@@ -274,7 +283,7 @@ dsh plugin --profile desktop remove dsh-session-share
 | `cordis.patch.yml` | bundle 层 patch：往插件树里 insert 一行 |
 | `tools/harness.mjs` | 离线脚手架：mock ctx 加载 host 半，把端点暴露成 `call(method, path, body)` |
 | `tools/export.mjs` | 命令行导出 / 预览 / 列会话（`--max-chars` 可选截断） |
-| `test-host.mjs` | host 半自测（81 项） |
+| `test-host.mjs` | host 半自测（83 项） |
 | `test-client.mjs` | client 半自测（60 项） |
 
 自测跑在**临时 `DSH_HOME` + mock 服务**上，全程不碰真实会话数据（host 侧用例还会校验 fixture 一个字节都没被改动）：
