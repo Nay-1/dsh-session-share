@@ -11,7 +11,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 let pass = 0;
 let failed = 0;
@@ -152,6 +152,39 @@ await writeFile(join(sessionDir, "session.v4.jsonl"), raw, "utf8");
 // 第二个会话：新建的空会话（没有工件）—— 用来验证「没内容可分享」的提示
 await mkdir(join(home, "sessions", SLUG, "session-test-empty"), { recursive: true });
 
+/** 第三个会话：纯文字（一张图都没有）—— md 导出不该为它多套一层文件夹。 */
+const PLAIN_ID = "session-test-plain";
+const plainSessionDir = join(home, "sessions", SLUG, PLAIN_ID);
+await mkdir(plainSessionDir, { recursive: true });
+await writeFile(join(plainSessionDir, "session.v4.jsonl"), `${[
+  { type: "session", version: 4, id: PLAIN_ID, createdAt: 1790000100000, cwd: WORKSPACE, agentPreset: "cordis" },
+  record(1, "session/title", { title: "纯文字会话" }),
+  record(2, "user/message", { role: "user", id: "p-1", content: [{ type: "text", text: "没有图片的一段话" }] }),
+  record(3, "assistant/message", { turn: 1, step: 1, message: { role: "assistant", content: [{ type: "text", text: "收到。" }] } })
+].map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+
+/**
+ * 第四个会话：正文引用了附件图片，但**对象文件不在**（附件被清理过）。
+ * md 导出时一张都落不下来 —— 不该留下「空 `.assets/` + 一个小文件夹」。
+ */
+const GHOST_ID = "session-test-ghost";
+const GHOST_SHA = "d".repeat(64);
+const ghostSessionDir = join(home, "sessions", SLUG, GHOST_ID);
+await mkdir(ghostSessionDir, { recursive: true });
+await writeFile(join(ghostSessionDir, "session.v4.jsonl"), `${[
+  { type: "session", version: 4, id: GHOST_ID, createdAt: 1790000200000, cwd: WORKSPACE, agentPreset: "cordis" },
+  record(1, "session/title", { title: "图片已失联" }),
+  record(2, "user/message", {
+    role: "user",
+    id: "g-1",
+    content: [
+      { type: "image", attachment: { attachmentId: `sha256:${GHOST_SHA}`, mediaType: "image/png", name: "ghost.png" } },
+      { type: "text", text: "这张图的原始文件已经不在附件库里了" }
+    ]
+  }),
+  record(3, "assistant/message", { turn: 1, step: 1, message: { role: "assistant", content: [{ type: "text", text: "看到了。" }] } })
+].map((row) => JSON.stringify(row)).join("\n")}\n`, "utf8");
+
 process.env.DSH_HOME = home;
 // 自测不弹窗口：只算命令，不真的拉起资源管理器 / 编辑器（见 README「已知边界」）
 process.env.DSH_SESSION_SHARE_NO_SPAWN = "1";
@@ -277,6 +310,47 @@ check("顺延的是整个文件夹（不是往里塞同名文件）", again.resu
   && existsSync(join(again.result.folder, `${again.result.baseName}.md`)));
 check("两次导出各自成文件夹", (await readdir(outDir, { withFileTypes: true }))
   .filter((entry) => entry.isDirectory()).length === 2);
+
+/* 回归：纯文字会话导出 md 时**不该多套一层文件夹**。
+ * 早期 md 一律建 `<标题-时间戳>/`，于是一个只有 `.md` 的会话也变成一个文件夹，
+ * 用户点开下载目录看到的是一层没意义的目录。现在按「有没有图片」决定形态。 */
+console.log("\n[导出：没有图片的会话]");
+const flatDir = join(home, "out-flat");
+const flat = await call("POST", "/export", { sessionId: PLAIN_ID, format: "md", dir: flatDir });
+check("导出成功", flat?.ok === true, JSON.stringify(flat)?.slice(0, 200));
+const flatFile = flat.result.files.find((file) => file.kind === "markdown");
+check("没有图片时 .md 直接落在导出目录", flat.result.folder === flatDir && dirname(flatFile.path) === flatDir,
+  `${flat.result.folder} / ${flatFile.path}`);
+check("没有图片时不建 <标题>/ 文件夹", !existsSync(join(flatDir, flat.result.baseName)));
+check("没有图片时不建 .assets 目录", !existsSync(join(flatDir, `${flat.result.baseName}.assets`)));
+check("文件名就是 <标题-时间戳>.md", basename(flatFile.path) === `${flat.result.baseName}.md`, basename(flatFile.path));
+check("导出目录里只有一个 .md", (await readdir(flatDir)).length === 1, (await readdir(flatDir)).join("、"));
+check("平铺出来的 .md 内容正常", (await readFile(flatFile.path, "utf8")).includes("没有图片的一段话"));
+check("平铺导出也不报图片", flat.result.imageCount === 0 && flat.result.imagesWritten === 0);
+
+const flatAgain = await call("POST", "/export", { sessionId: PLAIN_ID, format: "md", dir: flatDir });
+const flatAgainFile = flatAgain.result.files.find((file) => file.kind === "markdown");
+check("平铺同样不覆盖，顺延 (2)", flatAgain.result.baseName === `${flat.result.baseName} (2)`
+  && dirname(flatAgainFile.path) === flatDir, flatAgain.result.baseName);
+check("顺延后还是两个平铺的 .md（没有文件夹）", (await readdir(flatDir, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory()).length === 0
+  && (await readdir(flatDir)).length === 2);
+
+/* 回归：规划时有图、实际一张都落不下来（附件对象文件不在了）——
+ * 不能留下「空 `.assets/` + 一个小文件夹」的空壳。 */
+console.log("\n[导出：图片源文件失联]");
+const ghostDir = join(home, "out-ghost");
+const ghost = await call("POST", "/export", { sessionId: GHOST_ID, format: "md", dir: ghostDir });
+check("图片缺失不致命，导出照样成功", ghost?.ok === true, JSON.stringify(ghost)?.slice(0, 200));
+const ghostFile = ghost.result.files.find((file) => file.kind === "markdown");
+check("张数如实报出：计划 1 张、落盘 0 张、失败 1 张",
+  ghost.result.imageCount === 1 && ghost.result.imagesWritten === 0 && ghost.result.imagesFailed === 1,
+  JSON.stringify({ count: ghost.result.imageCount, written: ghost.result.imagesWritten, failed: ghost.result.imagesFailed }));
+check("一张都没落下来时 .md 提到导出目录", ghost.result.folder === ghostDir && dirname(ghostFile.path) === ghostDir,
+  `${ghost.result.folder} / ${ghostFile.path}`);
+check("不留空 .assets 目录", !existsSync(join(ghostDir, `${ghost.result.baseName}.assets`)));
+check("不留空的小文件夹", !existsSync(join(ghostDir, ghost.result.baseName)));
+check("导出目录里只剩那一个 .md", (await readdir(ghostDir)).length === 1, (await readdir(ghostDir)).join("、"));
 
 const html = await call("POST", "/export", { sessionId: SESSION_ID, format: "html", dir: outDir });
 const htmlFile = html.result.files.find((file) => file.kind === "html");
