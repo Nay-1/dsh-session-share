@@ -208,6 +208,20 @@ const chat = await call("POST", "/preview", { sessionId: SESSION_ID, scope: "cha
 check("仅对话模式：没有工具调用小节", !chat.result.sample.includes("🔧"), chat.result.sample.slice(0, 200));
 check("仅对话模式：没有思考过程小节", !chat.result.sample.includes("思考过程"));
 check("仅对话模式：正文还在", chat.result.sample.includes("帮我看看这个崩溃日志"));
+// 回归：同一轮的助手是**分步**落消息的，逐条渲染会留下一串只有标题+时间的空壳
+// （`## 🤖 助手 / <sub>…</sub> / ---`）。仅对话要把同一轮合成一段，空分段整段不出现。
+check("仅对话：同一轮的助手分步消息合并成一段",
+  (chat.result.sample.match(/## 🤖 助手/g) ?? []).length === 1,
+  String((chat.result.sample.match(/## 🤖 助手/g) ?? []).length));
+check("仅对话：合并后两段正文都在",
+  chat.result.sample.includes("我来看一下。") && chat.result.sample.includes("结论如下："));
+check("仅对话：没有「空标题 + 分隔线」的空壳小节",
+  !/## (?:🤖 助手|🧑 用户)\n\n<sub>[^\n]*<\/sub>\n\n---/.test(chat.result.sample),
+  chat.result.sample.match(/## 🤖 助手\n\n<sub>[^\n]*<\/sub>[\s\S]{0,24}/)?.[0]);
+const fullAgain = await call("POST", "/preview", { sessionId: SESSION_ID, scope: "full" });
+check("完整记录保持逐步（不合并）",
+  (fullAgain.result.sample.match(/## 🤖 助手/g) ?? []).length === 3,
+  String((fullAgain.result.sample.match(/## 🤖 助手/g) ?? []).length));
 
 console.log("\n[Markdown]");
 const markdown = await call("POST", "/markdown", { sessionId: SESSION_ID });
