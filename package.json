@@ -1,0 +1,36 @@
+{
+  "name": "dsh-session-share",
+  "version": "1.0.0",
+  "private": true,
+  "description": "在 DSH 侧栏会话行的 “...” 菜单里加一项「分享会话」：把会话导出成 Markdown 或单文件 HTML，或直接把 Markdown 复制到剪贴板。",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "cordis": ">=4.0.0-rc <5"
+  },
+  "engines": {
+    "node": "^22.15.0 || >=24.0.0"
+  }
+}

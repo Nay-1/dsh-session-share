@@ -1,0 +1,7 @@
+# dsh-session-share bundle 层：插入「分享会话」插件行。
+# host 半把会话工件读成 Markdown / 单文件 HTML 并落盘；client 半往
+# sidebar.workspaces.session.menu.item 注册菜单项，并在 shell.overlay 上开分享面板。
+- insert:
+    - id: dsh-session-share
+      name: 'dsh-session-share'
+      config: {}
