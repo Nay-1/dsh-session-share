@@ -13,6 +13,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { collectTextImageRefs } from "./lib/render.js";
+
 let pass = 0;
 let failed = 0;
 const check = (label, condition, extra) => {
@@ -56,7 +58,7 @@ await writeFile(join(textImageDir, TEXT_IMAGE_SHA), PNG);
 
 const record = (seq, type, data, time = 1790000000000 + seq * 1000) => ({ type, seq, time, data });
 
-/** 正文里的图片引用（含尖括号写法、越界引用、以及围栏内的"假引用"）。 */
+/** 正文里的图片引用（含尖括号写法、越界引用，以及围栏/行内代码里的"假引用"）。 */
 const REFERENCE_TEXT = [
   "结论如下：",
   "",
@@ -69,6 +71,8 @@ const REFERENCE_TEXT = [
   "```md",
   "![示例](crops/sign.jpg)",
   "```",
+  "",
+  "正文里写 `![行内代码里的示例](crops/sign.jpg)` 是在讲语法，不是在放图。",
   ""
 ].join("\n");
 
@@ -225,7 +229,7 @@ check("预览里没有 system-reminder", !result.sample.includes("system-reminde
 check("预览带默认目录", typeof result.defaultDir === "string" && result.defaultDir.length > 2);
 check("预览给的是片段而不是全文", result.sample.length <= 8000 && result.sampleTruncated === false);
 // 正文里按路径引用的图片：能解析的 1 处（`<crops/sign.jpg>`），越界的 2 处被拒
-check("统计：正文图片引用 3 处（围栏里的不算）", result.textImageRefs === 3, String(result.textImageRefs));
+check("统计：正文图片引用 3 处（围栏与行内代码里的不算）", result.textImageRefs === 3, String(result.textImageRefs));
 check("正文引用：打包 1 张", result.textImagesResolved === 1, String(result.textImagesResolved));
 check("正文引用：越界的 2 处被跳过并如实报出", result.textImagesSkipped === 2
   && result.textImageSkippedTargets.includes("../outside.jpg"));
@@ -268,6 +272,12 @@ check("工具结果里的图片被真的放进正文", /!\[sign\.png\]\(<[^>]*\.
 check("正文引用的工作区图片被改写", /!\[招牌区域\]\(<[^>]*\.assets\/ref-01-sign\.jpg>\)/.test(markdown.result.markdown),
   markdown.result.markdown.match(/!\[招牌区域\][^\n]*/)?.[0]);
 check("围栏里的示例引用不被改写", markdown.result.markdown.includes("![示例](crops/sign.jpg)"));
+// 回归：行内代码里的 `![x](path)` 在 Markdown 里是**字面文字**，不是图。
+// 早先照算，于是正文里凡是"讨论图片语法"的句子都被算成一处图片引用，
+// 面板报的「另有 N 处正文图片引用未打包」里全是噪声 —— 真正没打包的那张淹没在里面。
+check("行内代码里的示例引用不被改写",
+  markdown.result.markdown.includes("`![行内代码里的示例](crops/sign.jpg)`"),
+  markdown.result.markdown.match(/`!\[行内代码里的示例\][^\n]*/)?.[0]);
 check("命令记录留痕", markdown.result.markdown.includes("/permission read-only"));
 check("长正文没把围栏撑破", (markdown.result.markdown.match(/^`{3,}/gm) ?? []).length % 2 === 0);
 // 回归 4：默认**不截断**（早期默认把工具结果/参数截到 4000/1200，用户看到的是残缺记录）
@@ -284,6 +294,20 @@ check("不截断时元信息不写截断那行", !markdown.result.markdown.inclu
 check("含空格的链接目标用尖括号包住", markdown.result.markdown.includes("](<") && !/\]\([^)<>\n]*\s[^)\n]*\)/.test(markdown.result.markdown),
   markdown.result.markdown.match(/\]\([^)]*\s[^)]*\)/)?.[0] ?? "(无裸空格目标)");
 
+console.log("\n[行内代码里的图片语法不算引用]");
+const refsOf = (text) => collectTextImageRefs(
+  { messages: [{ role: "assistant", blocks: [{ type: "text", text }] }] },
+  "full"
+).map((ref) => ref.target);
+check("单反引号里的不算", refsOf("看 `![x](a/b.png)` 这段").length === 0, JSON.stringify(refsOf("看 `![x](a/b.png)` 这段")));
+check("双反引号里的也不算（内含单反引号）", refsOf("看 ``![x](a`b.png)`` 这段").length === 0,
+  JSON.stringify(refsOf("看 ``![x](a`b.png)`` 这段")));
+check("行内代码旁边的真引用照算", JSON.stringify(refsOf("`![x](fake.png)` 之后 ![真](real.png)")) === '["real.png"]',
+  JSON.stringify(refsOf("`![x](fake.png)` 之后 ![真](real.png)")));
+check("反引号没闭合时按普通文本算", JSON.stringify(refsOf("`![x](real.png)")) === '["real.png"]',
+  JSON.stringify(refsOf("`![x](real.png)")));
+check("围栏代码块里的仍然不算（回归）", refsOf("```\n![x](a.png)\n```").length === 0);
+
 console.log("\n[导出]");
 const outDir = join(home, "out");
 const md = await call("POST", "/export", { sessionId: SESSION_ID, format: "md", dir: outDir });
@@ -297,6 +321,8 @@ check("md 与 .assets 都装进新建的同名文件夹", md.result.folder === m
 check("附件图片落进同名 .assets 目录", existsSync(join(assetsDir, "img-01-shot.png")));
 check("工具结果里的图片也落盘了", existsSync(join(assetsDir, "img-02-sign.png")));
 check("正文引用的工作区图片被复制进 .assets", existsSync(join(assetsDir, "ref-01-sign.jpg")));
+check("行内代码里的示例引用没被复制进 .assets", !(await readdir(assetsDir)).some((name) => name.startsWith("ref-02")),
+  (await readdir(assetsDir)).join("、"));
 check("文件内容与 /markdown 一致", (await readFile(mdFile.path, "utf8")) === markdown.result.markdown);
 check("导出结果如实说明图片未内嵌", md.result.imagesEmbedded === false
   && md.result.imagesWritten === 3 && md.result.imageCount === 3, JSON.stringify({

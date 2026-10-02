@@ -156,8 +156,8 @@ Windows 上这一条是**实测挑出来的**：`rundll32 url.dll,FileProtocolHa
 
 - 只能引用**会话工作目录（`session` header 的 `cwd`）以内**的文件：相对路径按 cwd 解析，绝对路径也必须在 cwd 之内，`..` 越界、`http:` / `data:` / `file:` / 网络路径一律不认；
 - 只认图片扩展名（png/jpg/jpeg/gif/webp/bmp/svg），单张 ≤ 20 MB，整篇最多 50 张；
-- **围栏代码块里的 `![](...)` 不算引用**（示例代码不是图），`reasoning`（思考过程）与工具结果正文里的也不算 —— 那些地方是原文照登的，改了反而失真；
-- 解析不了的引用**原样留在正文里**，不静默删掉，同时在结果里报数（`textImagesSkipped`），面板状态行也会写「另有 N 处正文图片引用不在会话工作目录内，未打包」。
+- **围栏代码块里的 `![](...)` 不算引用**（示例代码不是图），**行内代码**（`` `![alt](relative/path)` ``）里的也不算 —— 在 Markdown 里它们是字面文字，不是图；`reasoning`（思考过程）与工具结果正文里的也不算，那些地方是原文照登的，改了反而失真；
+- 解析不了的引用**原样留在正文里**，不静默删掉，同时在结果里报数（`textImagesSkipped`），面板状态行也会写「另有 N 处正文图片引用不在会话工作目录内，未打包」。想知道**具体是哪几处、卡在哪一步**：`node tools/why-skipped.mjs <sessionId>`。
 
 ### 单文件 HTML（`.html`）
 
@@ -244,6 +244,7 @@ node tools/export.mjs <sessionId> --preview        # 只看预览，不落盘
 node tools/export.mjs <sessionId> --format html --dir D:/share
 node tools/export.mjs <sessionId> --scope chat --format md --reveal
 node tools/export.mjs <sessionId> --max-chars 4000        # 想截断时才截断（默认不截断）
+node tools/why-skipped.mjs <sessionId>             # 逐条列出正文图片引用为什么没打包
 ```
 
 MSYS/Git Bash 下注意：`--dir` 传的是 **host 视角的绝对路径**（`D:/share`、`C:/Users/…`）。
