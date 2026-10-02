@@ -320,6 +320,14 @@ check("只算命令、不真的拉窗口（自测不弹窗）", select.result?.v
 check("Windows 定位用 explorer /select,", process.platform !== "win32"
   || (select.result?.command === "explorer.exe" && select.result?.mode === "select"),
   JSON.stringify(select.result));
+// 回归：`/select,<路径>` 遇空格会被 libuv 把**整个参数**（含开关）加引号，Explorer 认不出
+// 开关、退去打开默认目录（带 ` (2)` 的导出目录实测会打开"文档"）。
+// 必须 `/select,"<路径>"` + 原样传参：引号只包路径。
+check("定位参数把引号只包在路径上", process.platform !== "win32"
+  || select.result?.args?.[0] === `/select,"${mdFile.path}"`,
+  JSON.stringify(select.result?.args));
+check("定位参数原样传给 explorer（不让 libuv 再加工）", process.platform !== "win32"
+  || select.result?.verbatim === true, String(select.result?.verbatim));
 // 回归：原来用 `rundll32 url.dll,FileProtocolHandler` 打开文件，实测对中文/空格路径
 // **静默失败**（用户看到的就是"点了没反应"）；`explorer.exe <文件>` 实测能拉起关联程序。
 const open = await call("POST", "/reveal", { path: mdFile.path, mode: "open" });
