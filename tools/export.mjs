@@ -22,6 +22,17 @@
  */
 import { call, flushLogs } from "./harness.mjs";
 
+/** 原因码 → 中文短标签（与 client 半的 `TEXT_IMAGE_REASON_KEYS` 同一套码）。 */
+const REASON_LABELS = [
+  ["outside-cwd", "不在会话工作目录内"],
+  ["missing", "文件不存在"],
+  ["not-image", "扩展名不像图片"],
+  ["remote", "是网址"],
+  ["too-large", "超过 20 MB"],
+  ["no-cwd", "会话没记工作目录"],
+  ["too-many", "超出 50 张上限"]
+];
+
 const argv = process.argv.slice(2);
 const flag = (name, fallback) => {
   const index = argv.indexOf(`--${name}`);
@@ -94,7 +105,12 @@ const main = async () => {
   console.log(`图片 ${result.imageCount} 张（内嵌=${result.imagesEmbedded}，落盘 ${result.imagesWritten}，失败 ${result.imagesFailed}）`);
   if (result.textImageRefs > 0) {
     console.log(`正文里按路径引用的图片 ${result.textImageRefs} 处：打包 ${result.textImagesResolved}，跳过 ${result.textImagesSkipped}`);
+    const reasons = result.textImageSkippedReasons ?? {};
+    const detail = REASON_LABELS.filter(([code]) => Number(reasons[code]) > 0)
+      .map(([code, label]) => `${label} ${reasons[code]} 处`);
+    if (detail.length > 0) console.log(`  为什么跳过：${detail.join("、")}`);
     if (result.textImagesSkipped > 0) console.log(`  跳过的是：${result.textImageSkippedTargets.join("、")}`);
+    if (result.textImagesSkipped > 0) console.log(`  逐条查：node tools/why-skipped.mjs ${sessionId}`);
   }
   if (has("reveal")) {
     const reveal = await call("POST", "/reveal", { path: result.files[0].path });

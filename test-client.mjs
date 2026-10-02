@@ -238,11 +238,13 @@ const defaultRoutes = () => ({
       imagesEmbedded: body.format === "html",
       imagesWritten: body.format === "html" ? 0 : 1,
       imagesFailed: 0,
-      // 正文里有 2 处图片引用落在会话工作目录之外：面板必须如实说出来
-      textImageRefs: 3,
+      // 正文里有 3 处图片引用没能打包：面板必须如实说出**原因**，不能一律说成
+      // "不在会话工作目录内"（那 1 处是"文件不存在"，用户拿着旧说法会查不到东西）
+      textImageRefs: 4,
       textImagesResolved: 1,
-      textImagesSkipped: 2,
+      textImagesSkipped: 3,
       textImageSkippedTargets: ["../outside.jpg"],
+      textImageSkippedReasons: { "outside-cwd": 2, missing: 1 },
       chars: 10
     }
   }),
@@ -369,7 +371,12 @@ check("导出参数带上了目录与格式",
 check("状态行报出导出路径", treeText(panel.tree).includes("D:/fixture-default/测试会话标题-20261002-1800.md"));
 check("如实说明图片去了 .assets 目录", treeText(panel.tree).includes(".assets"));
 // 正文里按路径引用的图片若打包不了，必须说出来 —— 否则用户只会看到"我写的图不见了"
-check("如实报出未打包的正文图片引用", treeText(panel.tree).includes("2 处正文图片引用"), treeText(panel.tree).slice(0, 200));
+check("如实报出未打包的正文图片引用", treeText(panel.tree).includes("3 处正文图片引用"), treeText(panel.tree).slice(0, 200));
+// 而且要说**为什么**：旧文案一律写成"不在会话工作目录内"，用户拿着这句话去查会查不到
+// 东西（他真正遇到的可能是"文件没了"）。这里 host 报了 2 处越界 + 1 处不存在，两条都要出现。
+check("未打包的原因分开说（越界 / 不存在）",
+  treeText(panel.tree).includes("2 处不在会话工作目录内") && treeText(panel.tree).includes("1 处文件不存在"),
+  treeText(panel.tree).slice(0, 300));
 check("目录记进了 localStorage", storage.get("dsh-session-share.dir") === "D:/fixture-default");
 check("导出后出现「打开所在文件夹」", byText(panel.tree, "打开所在文件夹") !== undefined);
 

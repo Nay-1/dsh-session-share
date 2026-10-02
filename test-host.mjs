@@ -68,9 +68,17 @@ const REFERENCE_TEXT = [
   "",
   `![绝对路径越界](${join(home, "outside.jpg")})`,
   "",
+  // 工作目录**以内**的绝对路径：必须能打包。早先"字母+冒号"被当成 URL 协议，
+  // 于是 `C:\…\crops\sign.jpg` 这种合法引用被静默拒绝 —— 而 agent 写报告时最常写绝对路径。
+  `![绝对路径在范围内](${join(WORKSPACE, "crops", "sign.jpg")})`,
+  "",
   "```md",
   "![示例](crops/sign.jpg)",
   "```",
+  "",
+  "![不存在的图](crops/missing.jpg)",
+  "",
+  "![不是图片](notes.txt)",
   "",
   "正文里写 `![行内代码里的示例](crops/sign.jpg)` 是在讲语法，不是在放图。",
   ""
@@ -228,14 +236,24 @@ check("未知类型进 skippedTypes", result.stats.skippedTypes["future/unknown-
 check("预览里没有 system-reminder", !result.sample.includes("system-reminder"));
 check("预览带默认目录", typeof result.defaultDir === "string" && result.defaultDir.length > 2);
 check("预览给的是片段而不是全文", result.sample.length <= 8000 && result.sampleTruncated === false);
-// 正文里按路径引用的图片：能解析的 1 处（`<crops/sign.jpg>`），越界的 2 处被拒
-check("统计：正文图片引用 3 处（围栏与行内代码里的不算）", result.textImageRefs === 3, String(result.textImageRefs));
-check("正文引用：打包 1 张", result.textImagesResolved === 1, String(result.textImagesResolved));
-check("正文引用：越界的 2 处被跳过并如实报出", result.textImagesSkipped === 2
+// 正文里按路径引用的图片：能解析的 2 处（相对 + 绝对，都指向 crops/sign.jpg），
+// 其余 4 处各有各的原因
+check("统计：正文图片引用 6 处（围栏与行内代码里的不算）", result.textImageRefs === 6, String(result.textImageRefs));
+check("正文引用：打包 2 张（相对与绝对路径各一）", result.textImagesResolved === 2, String(result.textImagesResolved));
+check("正文引用：跳过 4 处并如实报出", result.textImagesSkipped === 4
   && result.textImageSkippedTargets.includes("../outside.jpg"));
+// 原因必须分组报出：一律说成"不在会话工作目录内"会把用户带偏 ——
+// 他真正遇到的可能是"文件已经没了"，那是另一回事、另一种查法。
+check("正文引用：越界 2 / 不存在 1 / 不是图片 1",
+  JSON.stringify(result.textImageSkippedReasons) === JSON.stringify({ "outside-cwd": 2, missing: 1, "not-image": 1 }),
+  JSON.stringify(result.textImageSkippedReasons));
+check("盘符不被当成 URL 协议（绝对路径照常打包）", result.textImageSkippedReasons.remote === undefined,
+  JSON.stringify(result.textImageSkippedReasons));
 check("预览里改写成了打包后的相对路径",
   /!\[招牌区域\]\(<[^>]*\.assets\/ref-01-sign\.jpg>\)/.test(result.sample), result.sample.match(/!\[招牌区域\][^\n]*/)?.[0]);
 check("越界引用原样留在正文里（不静默改）", result.sample.includes("../outside.jpg"));
+check("不存在的引用也原样留着", result.sample.includes("![不存在的图](crops/missing.jpg)"));
+check("不是图片的引用原样留着", result.sample.includes("![不是图片](notes.txt)"));
 
 const kept = await call("POST", "/preview", { sessionId: SESSION_ID, includeInjected: true });
 check("打开开关后注入上下文保留", kept.result.stats.userMessages === 2 && kept.result.stats.injectedDropped === 0);
@@ -321,14 +339,18 @@ check("md 与 .assets 都装进新建的同名文件夹", md.result.folder === m
 check("附件图片落进同名 .assets 目录", existsSync(join(assetsDir, "img-01-shot.png")));
 check("工具结果里的图片也落盘了", existsSync(join(assetsDir, "img-02-sign.png")));
 check("正文引用的工作区图片被复制进 .assets", existsSync(join(assetsDir, "ref-01-sign.jpg")));
-check("行内代码里的示例引用没被复制进 .assets", !(await readdir(assetsDir)).some((name) => name.startsWith("ref-02")),
-  (await readdir(assetsDir)).join("、"));
+// .assets 里必须**只有**该打包的东西：多出来的都是"把讲语法的文字当成图"造成的幽灵产物
+const assetNames = (await readdir(assetsDir)).sort();
+check("行内代码里的示例引用没被复制成幽灵文件",
+  JSON.stringify(assetNames) === JSON.stringify(["img-01-shot.png", "img-02-sign.png", "ref-01-sign.jpg", "ref-02-sign.jpg"]),
+  assetNames.join("、"));
 check("文件内容与 /markdown 一致", (await readFile(mdFile.path, "utf8")) === markdown.result.markdown);
 check("导出结果如实说明图片未内嵌", md.result.imagesEmbedded === false
-  && md.result.imagesWritten === 3 && md.result.imageCount === 3, JSON.stringify({
+  && md.result.imagesWritten === 4 && md.result.imageCount === 4, JSON.stringify({
   written: md.result.imagesWritten, count: md.result.imageCount
 }));
-check("导出结果报出越界引用数", md.result.textImagesSkipped === 2 && md.result.textImagesResolved === 1);
+check("导出结果报出跳过的引用数与原因", md.result.textImagesSkipped === 4 && md.result.textImagesResolved === 2
+  && md.result.textImageSkippedReasons.missing === 1, JSON.stringify(md.result.textImageSkippedReasons));
 
 const again = await call("POST", "/export", { sessionId: SESSION_ID, format: "md", dir: outDir });
 check("同名不覆盖，顺延 (2)", again.result.baseName === `${md.result.baseName} (2)`, again.result.baseName);
