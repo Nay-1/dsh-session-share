@@ -32,6 +32,22 @@
 
 三个动作分别是 `复制 Markdown`（走 `writeClipboard`，带 `execCommand` 兜底）、`导出 .md`、`导出 HTML`。导出完面板下方会多出 `复制路径` / `打开所在文件夹` / `打开文件`。
 
+### `打开文件` / `打开所在文件夹` 是用什么调的
+
+| 平台 | 打开文件 | 定位到文件 |
+|---|---|---|
+| Windows | `explorer.exe <文件>` | `explorer.exe /select,<文件>` |
+| macOS | `open <文件>` | `open -R <文件>` |
+| Linux | `xdg-open <文件>` | `xdg-open <所在目录>` |
+
+Windows 上这一条是**实测挑出来的**：`rundll32 url.dll,FileProtocolHandler <路径>`（很多资料推荐的写法）与 `cmd /c start "" <路径>` 对**中文/空格路径静默失败** —— 用 Node 的 spawn 试过，进程起来了、什么也没发生，用户看到的就是「点了没反应」；`explorer.exe <文件>` 让资源管理器去走系统关联，同一份路径下能正常拉起关联程序。
+
+也考虑过 Electron 的 `shell.openPath`（它有返回值，失败能说出原因），但**拿不到**：DSH 的 Electron 主进程是把 host 当**子进程** spawn 出去的（`…/dsh-desktop-host/lib/index.js`），插件跑在那个纯 Node 子进程里，`import("electron")` 只会拿到 npm 上同名包的路径字符串。
+
+代价说清楚：命令行这条路**拿不到结果**，所以接口只回「已请求系统打开」（`opened` 保持 `undefined`，不谎报成功），面板也只说「已请求系统打开」。spawn 本身失败（命令不存在之类）会记进 host 日志。
+
+> 自测与脚本可以设 `DSH_SESSION_SHARE_NO_SPAWN=1`：只算出会跑哪条命令、不真的拉起窗口（`test-host.mjs` 就是这么跑的，不然每跑一次测试就弹一次资源管理器）。
+
 ### 切换内容范围为什么不"闪"
 
 第一版每次切换都 `data: undefined` + 切 loading，于是：预览塌成一行「读取中…」、面板高度猛跳、三个按钮一起 `disabled`（主按钮 `opacity:.4` 尤其明显），响应回来再弹回去 —— 观感就是"屏幕闪一下"。现在三条一起改掉：
@@ -263,7 +279,7 @@ client 侧用一个几十行的迷你 React 运行时（`useState` / `useEffect`
 - **正在被写入的会话也能导出**：读的是落盘快照，可能与界面上的最新一条差几秒。
 - **工具输出按字符截断**，不做智能摘要 —— 想看全文就调大上限或直接看原会话。
 - **旧会话的投影缓存/滚动副本**：一个会话目录里有多个工件时取**最大的那份**（事件是追加写的，大的更全），不是取文件名排序的第一个。
-- `reveal` 依赖系统命令：Windows 用 `explorer.exe /select,` 与 `rundll32 url.dll,FileProtocolHandler`，macOS 用 `open`，Linux 用 `xdg-open`。命令拉起失败只记日志，不影响导出结果。
+- `reveal` 依赖系统命令（见上文表格）：Windows 一律用 `explorer.exe`（打开 `/select,` 定位）。**命令行方式拿不到结果**，所以只能如实回「已请求系统打开」；spawn 本身失败只记 host 日志，不影响导出产物。自测用 `DSH_SESSION_SHARE_NO_SPAWN=1` 避免弹窗。
 - client 半在 `MenuItemButton` / `Modal` / `SegmentedControl` / `Checkbox` / `Input` / `Button` / `writeClipboard` 任意一个缺失时都会退回自绘实现，**绝不把 `undefined` 交给 `createElement`**（那会让整个侧栏渲染崩掉，而不是少一个按钮）。
 - ⚠️ **探测 primitives 组件不能用 `typeof x === "function"`**：`Button` 与 `Input` 是 `forwardRef(...)` 的产物，运行时是**对象**（`{ $$typeof: Symbol(react.forward_ref) }`），只有函数组件才是 function。早先按 function 探测 → 一律判成"不存在" → 静默走自绘兜底按钮，而兜底里硬编码的 `#fff` 文字撞上深色主题的近白 `--dsw-alias-brand-primary`（深色下 brand-primary 是 `#f9fafb`、前景色才是 `#0f1115`），**那个按钮在深色模式下等于隐形**；浅色下 brand-primary 是近黑，所以只在深色暴露。现在统一走 `reactComponent()`（function / string / `$$typeof` 对象都认），兜底的强调态也改成"描边 + 加粗"而不是实心填充 —— 实心必须与前景色配对，而那对变量在浅色下是"近黑底 + 白字"、深色下是"近白底 + 深字"，硬编码任何一种前景色都会在另一个主题里翻车。测试里有一条 forwardRef 形状的用例守着这个坑。
 

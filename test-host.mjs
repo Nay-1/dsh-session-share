@@ -153,6 +153,8 @@ await writeFile(join(sessionDir, "session.v4.jsonl"), raw, "utf8");
 await mkdir(join(home, "sessions", SLUG, "session-test-empty"), { recursive: true });
 
 process.env.DSH_HOME = home;
+// 自测不弹窗口：只算命令，不真的拉起资源管理器 / 编辑器（见 README「已知边界」）
+process.env.DSH_SESSION_SHARE_NO_SPAWN = "1";
 const { call, health, flushLogs } = await import("./tools/harness.mjs");
 
 /* ---- 端点 ---------------------------------------------------------------- */
@@ -290,12 +292,31 @@ check("非法会话 id 被拒（400）", badId?.ok === false && badId.code === "
 const notFound = await call("GET", "/nope");
 check("未知端点 404", notFound?.ok === false);
 
-console.log("\n[reveal 白名单]");
-// 只测拒绝路径：允许的那条会真的拉起资源管理器，自测不该弹窗口。
+console.log("\n[reveal 白名单与打开链]");
 const foreign = await call("POST", "/reveal", { path: join(home, "sessions") });
 check("没导出过的路径不给定位（403）", foreign?.ok === false && foreign.code === "forbidden", JSON.stringify(foreign));
 const traversal = await call("POST", "/reveal", { path: join(outDir, "..", "..", "sessions") });
 check("绕过目录的路径也不给（403）", traversal?.ok === false && traversal.code === "forbidden");
+
+// 允许的路径：测试环境设了 DSH_SESSION_SHARE_NO_SPAWN=1，只算命令不拉窗口
+const select = await call("POST", "/reveal", { path: mdFile.path, mode: "select" });
+check("定位导出过的文件：返回实情", select?.ok === true, JSON.stringify(select)?.slice(0, 200));
+check("只算命令、不真的拉窗口（自测不弹窗）", select.result?.via === "spawn" && select.result?.spawned === false,
+  JSON.stringify(select.result));
+check("Windows 定位用 explorer /select,", process.platform !== "win32"
+  || (select.result?.command === "explorer.exe" && select.result?.mode === "select"),
+  JSON.stringify(select.result));
+// 回归：原来用 `rundll32 url.dll,FileProtocolHandler` 打开文件，实测对中文/空格路径
+// **静默失败**（用户看到的就是"点了没反应"）；`explorer.exe <文件>` 实测能拉起关联程序。
+const open = await call("POST", "/reveal", { path: mdFile.path, mode: "open" });
+check("打开文件：命令行方式不谎报成功",
+  open?.ok === true && open.result?.via === "spawn" && open.result?.opened === undefined,
+  JSON.stringify(open.result));
+check("Windows 打开文件用 explorer.exe（不是 rundll32）", process.platform !== "win32"
+  || (open.result?.command === "explorer.exe" && open.result?.mode === "open"),
+  JSON.stringify(open.result));
+const missingPath = await call("POST", "/reveal", { path: join(mdFolder, "不存在.md") });
+check("路径不存在（404）", missingPath?.ok === false && missingPath.code === "not-found");
 
 console.log("\n[fixture 没被弄脏]");
 check("会话工件仍是 fixture 内容", (await stat(join(sessionDir, "session.v4.jsonl"))).size === Buffer.byteLength(raw, "utf8"));
